@@ -1,0 +1,216 @@
+#!/system/bin/sh
+
+STATE_DIR="${TSLR_STATE_DIR:-/data/adb/ts-lan-route}"
+IP="${TSLR_IP_CMD:-ip}"
+TAILSCALE="${TSLR_TAILSCALE_CMD:-tailscale}"
+PROTO=242
+TABLE=52
+
+show_help() {
+    cat <<'HELP'
+TS LAN Route - Tailscale Exit Node用のローカルLAN経路補完
+
+使い方:
+    su -c 'ts-lan-route <コマンド>'
+
+コマンド:
+    status       設定値と追加済み経路を表示
+    plan         ローカルLAN経路の候補を確認（変更なし）
+    apply        ExitNodeAllowLANAccess=trueかつExit Node有効時に
+                 不足経路を追加・古い補完経路を削除
+                 falseやExit Node無効時は補完経路を削除
+    cleanup      本モジュールが追加した経路だけを削除
+    -h, --help   このヘルプを表示
+
+対象:
+    IPv4直結LAN（10/8、172.16/12、192.168/16、169.254/16）。
+    インターフェース名を固定せず、接続中のLANを検出する。
+    既存のTailscale経路や他ソフトの経路は変更しない。
+    tailscale debug prefsのExitNodeAllowLANAccessを必ず確認する。
+    IPv6には対応しない。自動監視・自動実行はしない。
+
+Magisk/KernelSUのActionボタンは 'apply' を1回実行する。
+HELP
+}
+
+say() {
+    printf '%s\n' "$*"
+}
+
+is_root() {
+    [ "$(id -u)" = 0 ] || {
+        say 'エラー: rootで実行する必要がある。'
+        return 1
+    }
+}
+
+ensure_state() {
+    mkdir -p "$STATE_DIR" || return 1
+    chmod 700 "$STATE_DIR" 2>/dev/null || true
+}
+
+prefs_state() {
+    prefs=$("$TAILSCALE" debug prefs 2>/dev/null) || return 1
+    enabled=$(printf '%s\n' "$prefs" | sed -n 's/.*"ExitNodeAllowLANAccess"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -n 1)
+    case "$enabled" in
+        true|false) printf '%s\n' "$enabled" ;;
+        *) return 1 ;;
+    esac
+}
+
+exit_route_ready() {
+    "$IP" -4 route show table "$TABLE" 2>/dev/null | grep -Eq '^default[[:space:]]+dev[[:space:]]+tailscale0([[:space:]]|$)'
+}
+
+collect_candidates() {
+    "$IP" -4 -o route show table all 2>/dev/null | awk '
+        $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ {
+            cidr = $1
+            dev = ""
+            scope = ""
+            table = "main"
+            for (i = 2; i <= NF; i++) {
+                if ($i == "dev") dev = $(i + 1)
+                if ($i == "scope") scope = $(i + 1)
+                if ($i == "table") table = $(i + 1)
+            }
+            if (dev == "" || scope != "link" || table == "52" || table == "local") next
+            if (dev ~ /^(lo|dummy|tailscale|tun|tap|wg|rmnet|ccmni|ccmni|pdp|wwan|v4-|clat|ipsec|xfrm|ip6tnl|sit|gre|gretap|erspan|veth|docker|podman)/) next
+            split(cidr, octets, /[.\/]/)
+            a = octets[1] + 0
+            b = octets[2] + 0
+            if (!(a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) || (a == 169 && b == 254))) next
+            print cidr "|" dev
+        }
+    ' | sort -u
+}
+
+managed_routes() {
+    "$IP" -4 -o route show table "$TABLE" 2>/dev/null | awk -v proto="$PROTO" '
+        $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ {
+            dev = ""
+            managed = 0
+            for (i = 2; i <= NF; i++) {
+                if ($i == "dev") dev = $(i + 1)
+                if ($i == "proto" && $(i + 1) == proto) managed = 1
+            }
+            if (managed && dev != "") print $1 "|" dev
+        }
+    ' | sort -u
+}
+
+route_present() {
+    target="$1"
+    "$IP" -4 -o route show table "$TABLE" 2>/dev/null | awk -v c="$target" '
+        $1 == c || (($1 == "throw" || $1 == "blackhole" || $1 == "unreachable" || $1 == "prohibit") && $2 == c) {
+            found = 1
+        }
+        END { exit found ? 0 : 1 }
+    '
+}
+
+remove_managed() {
+    managed_routes | while IFS='|' read -r cidr dev; do
+        [ -n "$cidr" ] && [ -n "$dev" ] || continue
+        if "$IP" -4 route del "$cidr" dev "$dev" proto "$PROTO" table "$TABLE" 2>/dev/null; then
+            say "削除: $cidr dev $dev"
+        else
+            say "削除失敗: $cidr dev $dev" >&2
+        fi
+    done
+}
+
+lock_sync() {
+    attempts=0
+    while [ "$attempts" -lt 15 ]; do
+        if mkdir "$STATE_DIR/sync.lock" 2>/dev/null; then
+            printf '%s\n' "$$" > "$STATE_DIR/sync.lock/pid"
+            return 0
+        fi
+        old_pid=$(cat "$STATE_DIR/sync.lock/pid" 2>/dev/null || true)
+        if [ -z "$old_pid" ] || ! kill -0 "$old_pid" 2>/dev/null; then
+            rm -rf "$STATE_DIR/sync.lock"
+        else
+            sleep 1
+        fi
+        attempts=$((attempts + 1))
+    done
+    say '別の経路更新処理が終了しないため、中止した。' >&2
+    return 1
+}
+
+sync_routes() (
+    is_root || exit 1
+    ensure_state || exit 1
+    lock_sync || exit 1
+    desired_file="$STATE_DIR/candidates.$$"
+    trap 'rm -f "$desired_file"; rm -rf "$STATE_DIR/sync.lock"' EXIT
+    state=$(prefs_state) || {
+        say 'Tailscale設定を取得できないため、経路を変更しない。' >&2
+        exit 1
+    }
+    if [ "$state" != true ] || ! exit_route_ready; then
+        remove_managed
+        say "追加なし: AllowLAN=$state / Exit Node経路なし、または無効"
+        exit 0
+    fi
+    collect_candidates > "$desired_file" || exit 1
+    managed_routes | while IFS='|' read -r cidr dev; do
+        [ -n "$cidr" ] && [ -n "$dev" ] || continue
+        if ! grep -Fqx "$cidr|$dev" "$desired_file"; then
+            if "$IP" -4 route del "$cidr" dev "$dev" proto "$PROTO" table "$TABLE" 2>/dev/null; then
+                say "不要経路を削除: $cidr dev $dev"
+            fi
+        fi
+    done
+    while IFS='|' read -r cidr dev; do
+        [ -n "$cidr" ] && [ -n "$dev" ] || continue
+        if ! route_present "$cidr"; then
+            if "$IP" -4 route add "$cidr" dev "$dev" proto "$PROTO" scope link table "$TABLE" 2>/dev/null; then
+                say "追加: $cidr dev $dev"
+            else
+                say "追加失敗: $cidr dev $dev" >&2
+            fi
+        fi
+    done < "$desired_file"
+)
+
+cleanup_routes() (
+    is_root || exit 1
+    ensure_state || exit 1
+    lock_sync || exit 1
+    trap 'rm -rf "$STATE_DIR/sync.lock"' EXIT
+    remove_managed
+)
+
+status() {
+    is_root || return 1
+    state=$(prefs_state 2>/dev/null) || state='取得失敗'
+    if exit_route_ready; then
+        ready='あり'
+    else
+        ready='なし'
+    fi
+    say "ExitNodeAllowLANAccess: $state"
+    say "Exit Node経路(table $TABLE): $ready"
+    say '本モジュールが追加した経路:'
+    managed_routes
+}
+
+plan() {
+    is_root || return 1
+    state=$(prefs_state 2>/dev/null) || state='取得失敗'
+    say "ExitNodeAllowLANAccess: $state"
+    say '追加候補（既存経路は上書きしない）:'
+    collect_candidates
+}
+
+
+case "${1:-}" in
+    -h|--help|'') show_help ;;
+    status) status ;;
+    plan) plan ;;
+    apply) sync_routes ;;
+    cleanup) cleanup_routes ;;
+    *) show_help; exit 1 ;;
+esac
