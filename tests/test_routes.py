@@ -76,7 +76,10 @@ class RouteTests(unittest.TestCase):
         self.tailscale.write_text(MOCK_TS)
         self.ip.chmod(0o755)
         self.tailscale.chmod(0o755)
-        self.env = {**os.environ, 'TSLR_STATE_DIR': str(self.root / 'state'), 'TSLR_IP_CMD': str(self.ip), 'TSLR_TAILSCALE_CMD': str(self.tailscale), 'MOCK_ROUTE_FILE': str(self.routes), 'MOCK_PREF_FILE': str(self.pref)}
+        self.fake_id = self.root / 'id'
+        self.fake_id.write_text('#!/bin/sh\n[ "$1" = "-u" ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n')
+        self.fake_id.chmod(0o755)
+        self.env = {**os.environ, 'PATH': f'{self.root}{os.pathsep}{os.environ.get("PATH", "")}', 'TSLR_STATE_DIR': str(self.root / 'state'), 'TSLR_IP_CMD': str(self.ip), 'TSLR_TAILSCALE_CMD': str(self.tailscale), 'MOCK_ROUTE_FILE': str(self.routes), 'MOCK_PREF_FILE': str(self.pref)}
 
     def run_cli(self, *args):
         return subprocess.run(['/bin/sh', str(MODULE), *args], env=self.env, text=True, capture_output=True)

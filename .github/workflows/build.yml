@@ -1,0 +1,79 @@
+name: Build Magisk ZIP
+
+on:
+    push:
+        branches:
+            - main
+        tags:
+            - 'v*'
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Verify scripts and run tests
+              run: |
+                  set -euo pipefail
+                  sh -n action.sh uninstall.sh system/bin/ts-lan-route
+                  python3 -m unittest discover -s tests -v
+
+            - name: Build and verify module ZIP
+              id: package
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  version="$(sed -n 's/^version=//p' module.prop)"
+                  [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+                  if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                      [[ "$GITHUB_REF_NAME" == "$version" ]]
+                  fi
+                  mkdir -p dist
+                  archive="dist/TS-LAN-Route-${version}.zip"
+                  zip -q -X "$archive" module.prop action.sh uninstall.sh system/bin/ts-lan-route
+                  unzip -t "$archive"
+                  diff -u <(printf '%s\n' action.sh module.prop system/bin/ts-lan-route uninstall.sh | sort) <(unzip -Z1 "$archive" | sort)
+                  printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+
+            - name: Upload workflow artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: TS-LAN-Route-Magisk-ZIP
+                  path: ${{ steps.package.outputs.archive }}
+                  if-no-files-found: error
+
+    release:
+        if: startsWith(github.ref, 'refs/tags/v')
+        needs: build
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: Download generated ZIP
+              uses: actions/download-artifact@v4
+              with:
+                  name: TS-LAN-Route-Magisk-ZIP
+                  path: dist
+
+            - name: Publish ZIP to GitHub Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+              run: |
+                  set -euo pipefail
+                  archive="dist/TS-LAN-Route-${GITHUB_REF_NAME}.zip"
+                  test -f "$archive"
+                  if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+                      gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
+                  else
+                      gh release create "$GITHUB_REF_NAME" "$archive" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+                  fi

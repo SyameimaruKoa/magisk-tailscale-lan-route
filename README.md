@@ -6,7 +6,7 @@
 
 ## インストール
 
-`dist/TS-LAN-Route-v1.1.0.zip` をMagisk/KernelSUのモジュール画面からインストールし、端末を再起動する。
+[Releases](https://github.com/SyameimaruKoa/magisk-tailscale-lan-route/releases) からZIPを取得し、Magisk/KernelSUのモジュール画面でインストールして再起動する。
 
 ## 実行
 
@@ -48,3 +48,11 @@ su -c 'sh /data/adb/modules/ts-lan-route/system/bin/ts-lan-route apply'
 ## アンインストール
 
 モジュールをアンインストールすると、自身が追加した経路を削除する。手動で先に削除する場合は`cleanup`を実行する。
+
+## ZIPの自動生成
+
+GitHub Actionsの[Build Magisk ZIP](https://github.com/SyameimaruKoa/magisk-tailscale-lan-route/actions/workflows/build.yml)で生成する。`main`へのpush、PR、手動実行でテストとZIPビルドを行い、ActionsのArtifactsに保存する。
+
+`module.prop`の`version`と同じタグ（例：`v1.1.0`）をpushすると、同じZIPをGitHub Releasesのアセットにも自動登録する。タグと`module.prop`のバージョンが一致しない場合はビルドを失敗させる。
+
+生成した`dist/`のZIPはGit管理しない。ActionsのArtifactsはGitHub提供のアーカイブ形式であるため、インストール用にはReleasesのZIPを使用する。
