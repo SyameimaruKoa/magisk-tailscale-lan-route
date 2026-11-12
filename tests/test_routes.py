@@ -57,7 +57,10 @@ if sys.argv[1:] != ['debug', 'prefs']:
 value = Path(os.environ['MOCK_PREF_FILE']).read_text().strip()
 if value == 'invalid':
     sys.exit(1)
-print('{"ExitNodeAllowLANAccess": ' + value + '}')
+if value.startswith('{'):
+    print(value)
+else:
+    print('{"ExitNodeAllowLANAccess": ' + value + '}')
 '''
 
 
@@ -144,6 +147,33 @@ class RouteTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(str(self.tailscale), result.stderr)
         self.assertIn('debug prefs', result.stderr)
+
+    def test_pref_parser_without_gnu_sed_extensions(self):
+        sed = self.root / 'sed'
+        sed.write_text('#!/bin/sh\necho "sed: unsupported BRE alternation" >&2\nexit 1\n')
+        sed.chmod(0o755)
+        result = self.run_cli('apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('169.254.1.0/24 dev eth1 proto 242 scope link', self.get_routes())
+
+    def test_pref_parser_compact_json(self):
+        self.pref.write_text('{"Other": false, "ExitNodeAllowLANAccess": true, "RouteAll": true}')
+        result = self.run_cli('apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('169.254.2.0/24 dev eth0 proto 242 scope link', self.get_routes())
+
+    def test_pref_parser_missing_field_keeps_routes(self):
+        self.pref.write_text('{"Other": true}')
+        result = self.run_cli('apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ExitNodeAllowLANAccessが見つからない', result.stderr)
+        self.assertEqual(self.get_routes(), ['default dev tailscale0', 'throw 192.168.55.0/24'])
+
+    def test_pref_parser_rejects_non_boolean(self):
+        self.pref.write_text('{"ExitNodeAllowLANAccess": "true"}')
+        result = self.run_cli('apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.get_routes(), ['default dev tailscale0', 'throw 192.168.55.0/24'])
 
     def test_help(self):
         self.assertIn('使い方:', self.run_cli('--help').stdout)

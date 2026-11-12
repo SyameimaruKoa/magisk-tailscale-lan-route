@@ -40,6 +40,11 @@ su -c 'sh /data/adb/modules/ts-lan-route/system/bin/ts-lan-route apply'
 169.254.2.0/24 dev eth0 proto 242 scope link
 ```
 
+
+## 設定解析の互換性
+
+Android標準の`sed`で正規表現の選択構文が動作しない場合を考慮し、`ExitNodeAllowLANAccess`はPOSIX拡張正規表現を使った`awk`で解析する。値が確定できない場合は経路を変更しない。
+
 ## 制限
 
 - **自動監視・起動時適用なし**。USB再接続、インターフェース変更、Tailscaleの経路再生成後は、Actionボタンまたは`apply`を再実行する。
