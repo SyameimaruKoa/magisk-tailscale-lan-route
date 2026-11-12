@@ -1,6 +1,6 @@
 id=ts-lan-route
 name=Tailscale Exit Node LAN Route Fix
-version=v1.1.1
-versionCode=10101
+version=v1.1.2
+versionCode=10102
 author=SyameimaruKoa
 description=Manually restore missing IPv4 LAN routes in Tailscale table 52 when ExitNodeAllowLANAccess is enabled.
