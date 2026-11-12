@@ -87,7 +87,14 @@ prefs_state() {
         say "rootシェルで上記コマンドを実行し、tailscaledとの接続を確認してほしい。" >&2
         return 1
     }
-    enabled=$(printf '%s\n' "$prefs" | sed -n 's/.*"ExitNodeAllowLANAccess"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -n 1)
+    enabled=$(printf '%s\n' "$prefs" | awk '
+        match($0, /"ExitNodeAllowLANAccess"[[:space:]]*:[[:space:]]*(true|false)/) {
+            value = substr($0, RSTART, RLENGTH)
+            sub(/^.*:[[:space:]]*/, "", value)
+            print value
+            exit
+        }
+    ')
     case "$enabled" in
         true|false) printf '%s\n' "$enabled" ;;
         *)
