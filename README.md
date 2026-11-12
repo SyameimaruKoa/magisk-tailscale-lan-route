@@ -53,6 +53,8 @@ su -c 'sh /data/adb/modules/ts-lan-route/system/bin/ts-lan-route apply'
 
 GitHub Actionsの[Build Magisk ZIP](https://github.com/SyameimaruKoa/magisk-tailscale-lan-route/actions/workflows/build.yml)で生成する。`main`へのpush、PR、手動実行でテストとZIPビルドを行い、ActionsのArtifactsに保存する。
 
-`module.prop`の`version`と同じタグ（例：`v1.1.0`）をpushすると、同じZIPをGitHub Releasesのアセットにも自動登録する。タグと`module.prop`のバージョンが一致しない場合はビルドを失敗させる。
+**`main`に変更がマージされ、`module.prop`のバージョンに対応するReleaseが未作成の場合、ZIP付きのReleaseを自動作成する。** 同一バージョンのReleaseがすでに存在する場合、`main`へのpushでは公開済みのZIPを上書きしない。
 
-生成した`dist/`のZIPはGit管理しない。ActionsのArtifactsはGitHub提供のアーカイブ形式であるため、インストール用にはReleasesのZIPを使用する。
+同じバージョンのタグ（例：`v1.1.0`）をpushすると、対応するReleaseを作成・更新する。タグと`module.prop`のバージョンが一致しない場合はビルドを失敗させる。
+
+生成した`dist/`のZIPはGit管理しない。インストール用ZIPは[GitHub Releases](https://github.com/SyameimaruKoa/magisk-tailscale-lan-route/releases)から取得する。

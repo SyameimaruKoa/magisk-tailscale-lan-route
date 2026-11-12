@@ -52,12 +52,15 @@ jobs:
                   if-no-files-found: error
 
     release:
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         needs: build
         runs-on: ubuntu-latest
         permissions:
             contents: write
         steps:
+            - name: Checkout module metadata
+              uses: actions/checkout@v4
+
             - name: Download generated ZIP
               uses: actions/download-artifact@v4
               with:
@@ -70,10 +73,17 @@ jobs:
                   GH_REPO: ${{ github.repository }}
               run: |
                   set -euo pipefail
-                  archive="dist/TS-LAN-Route-${GITHUB_REF_NAME}.zip"
+                  version="$(sed -n 's/^version=//p' module.prop)"
+                  archive="dist/TS-LAN-Route-${version}.zip"
                   test -f "$archive"
-                  if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-                      gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
+                  if gh release view "$version" >/dev/null 2>&1; then
+                      if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                          gh release upload "$version" "$archive" --clobber
+                      else
+                          echo "Release $version already exists; not replacing a published version."
+                      fi
+                  elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                      gh release create "$version" "$archive" --verify-tag --title "$version" --generate-notes
                   else
-                      gh release create "$GITHUB_REF_NAME" "$archive" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+                      gh release create "$version" "$archive" --target "$GITHUB_SHA" --title "$version" --generate-notes
                   fi
