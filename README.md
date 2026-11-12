@@ -4,6 +4,8 @@
 
 **手動実行専用**。起動時の自動処理や常駐監視はしない。
 
+MagiskのActionボタンでは、`magisk-tailscaled`の`/data/adb/tailscale/bin/tailscale`を優先して検出する。PATHにCLIが登録されていなくても`ExitNodeAllowLANAccess`を取得できるようにしてある。取得に失敗した場合は検出したCLIのパスをエラーに表示し、経路は変更しない。
+
 ## インストール
 
 [Releases](https://github.com/SyameimaruKoa/magisk-tailscale-lan-route/releases) からZIPを取得し、Magisk/KernelSUのモジュール画面でインストールして再起動する。

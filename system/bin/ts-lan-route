@@ -2,7 +2,8 @@
 
 STATE_DIR="${TSLR_STATE_DIR:-/data/adb/ts-lan-route}"
 IP="${TSLR_IP_CMD:-ip}"
-TAILSCALE="${TSLR_TAILSCALE_CMD:-tailscale}"
+TAILSCALE="${TSLR_TAILSCALE_CMD:-}"
+TAILSCALE_BIN_DIR="${TSLR_TAILSCALE_BIN_DIR:-/data/adb/tailscale/bin}"
 PROTO=242
 TABLE=52
 
@@ -27,6 +28,7 @@ TS LAN Route - Tailscale Exit Node用のローカルLAN経路補完
     インターフェース名を固定せず、接続中のLANを検出する。
     既存のTailscale経路や他ソフトの経路は変更しない。
     tailscale debug prefsのExitNodeAllowLANAccessを必ず確認する。
+    MagiskのActionからもmagisk-tailscaledのCLIを直接検出する。
     IPv6には対応しない。自動監視・自動実行はしない。
 
 Magisk/KernelSUのActionボタンは 'apply' を1回実行する。
@@ -49,12 +51,49 @@ ensure_state() {
     chmod 700 "$STATE_DIR" 2>/dev/null || true
 }
 
+resolve_tailscale() {
+    if [ -n "$TAILSCALE" ]; then
+        case "$TAILSCALE" in
+            */*) [ -x "$TAILSCALE" ] || return 1 ;;
+            *) command -v "$TAILSCALE" >/dev/null 2>&1 || return 1 ;;
+        esac
+        return 0
+    fi
+    for candidate in \
+        "$TAILSCALE_BIN_DIR/tailscale" \
+        /data/adb/modules/magisk-tailscaled/system/bin/tailscale \
+        /dev/tailscale \
+        /system/bin/tailscale; do
+        if [ -x "$candidate" ]; then
+            TAILSCALE="$candidate"
+            return 0
+        fi
+    done
+    TAILSCALE=$(command -v tailscale 2>/dev/null) || return 1
+    [ -n "$TAILSCALE" ]
+}
+
 prefs_state() {
-    prefs=$("$TAILSCALE" debug prefs 2>/dev/null) || return 1
+    if ! resolve_tailscale; then
+        say 'Tailscale CLIが見つからない。magisk-tailscaledのインストール状態を確認してほしい。' >&2
+        return 1
+    fi
+    if [ -d /data/adb/tailscale ]; then
+        HOME=/data/adb/tailscale
+        export HOME
+    fi
+    prefs=$("$TAILSCALE" debug prefs 2>/dev/null) || {
+        say "Tailscale CLIの実行に失敗: $TAILSCALE debug prefs" >&2
+        say "rootシェルで上記コマンドを実行し、tailscaledとの接続を確認してほしい。" >&2
+        return 1
+    }
     enabled=$(printf '%s\n' "$prefs" | sed -n 's/.*"ExitNodeAllowLANAccess"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -n 1)
     case "$enabled" in
         true|false) printf '%s\n' "$enabled" ;;
-        *) return 1 ;;
+        *)
+            say "Tailscaleの設定出力にExitNodeAllowLANAccessが見つからない: $TAILSCALE" >&2
+            return 1
+            ;;
     esac
 }
 
