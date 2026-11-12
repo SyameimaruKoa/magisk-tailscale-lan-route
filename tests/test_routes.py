@@ -121,6 +121,30 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.run_cli('cleanup').returncode, 0)
         self.assertEqual(self.get_routes(), ['default dev tailscale0', 'throw 192.168.55.0/24'])
 
+    def test_action_resolves_installed_tailscale_binary_without_path(self):
+        installed = self.root / 'magisk-bin'
+        installed.mkdir()
+        (installed / 'tailscale').symlink_to(self.tailscale)
+        self.env.pop('TSLR_TAILSCALE_CMD')
+        self.env['TSLR_TAILSCALE_BIN_DIR'] = str(installed)
+        result = self.run_cli('apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('169.254.1.0/24 dev eth1 proto 242 scope link', self.get_routes())
+
+    def test_action_missing_binary_preserves_routes(self):
+        self.env['TSLR_TAILSCALE_CMD'] = str(self.root / 'missing' / 'tailscale')
+        result = self.run_cli('apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Tailscale CLIが見つからない', result.stderr)
+        self.assertEqual(self.get_routes(), ['default dev tailscale0', 'throw 192.168.55.0/24'])
+
+    def test_action_cli_failure_reports_binary_path(self):
+        self.pref.write_text('invalid')
+        result = self.run_cli('apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(self.tailscale), result.stderr)
+        self.assertIn('debug prefs', result.stderr)
+
     def test_help(self):
         self.assertIn('使い方:', self.run_cli('--help').stdout)
         self.assertIn('使い方:', self.run_cli().stdout)
