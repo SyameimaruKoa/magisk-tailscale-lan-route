@@ -39,6 +39,34 @@ say() {
     printf '%s\n' "$*"
 }
 
+log_info() {
+    say "[INFO] $*"
+}
+
+log_add() {
+    say "[ADD] $*"
+}
+
+log_skip() {
+    say "[SKIP] $*"
+}
+
+log_remove() {
+    say "[REMOVE] $*"
+}
+
+log_warn() {
+    say "[WARN] $*"
+}
+
+log_error() {
+    say "[ERROR] $*" >&2
+}
+
+log_summary() {
+    say "[RESULT] 追加=$added_count / 既存=$skipped_count / 削除=$removed_count / 失敗=$error_count"
+}
+
 is_root() {
     [ "$(id -u)" = 0 ] || {
         say 'エラー: rootで実行する必要がある。'
@@ -156,14 +184,22 @@ route_present() {
 }
 
 remove_managed() {
-    managed_routes | while IFS='|' read -r cidr dev; do
+    managed_routes > "$managed_file" || return 1
+    if [ ! -s "$managed_file" ]; then
+        log_info '本モジュールの削除対象経路なし'
+        return 0
+    fi
+    while IFS='|' read -r cidr dev; do
         [ -n "$cidr" ] && [ -n "$dev" ] || continue
-        if "$IP" -4 route del "$cidr" dev "$dev" proto "$PROTO" table "$TABLE" 2>/dev/null; then
-            say "削除: $cidr dev $dev"
+        if output=$("$IP" -4 route del "$cidr" dev "$dev" proto "$PROTO" table "$TABLE" 2>&1); then
+            log_remove "$cidr dev $dev"
+            removed_count=$((removed_count + 1))
         else
-            say "削除失敗: $cidr dev $dev" >&2
+            log_error "経路を削除できない: $cidr dev $dev"
+            [ -z "$output" ] || log_error "$output"
+            error_count=$((error_count + 1))
         fi
-    done
+    done < "$managed_file"
 }
 
 lock_sync() {
@@ -187,46 +223,112 @@ lock_sync() {
 
 sync_routes() (
     is_root || exit 1
-    ensure_state || exit 1
+    ensure_state || { log_error '状態保存ディレクトリを作成できない'; exit 1; }
     lock_sync || exit 1
     desired_file="$STATE_DIR/candidates.$$"
-    trap 'rm -f "$desired_file"; rm -rf "$STATE_DIR/sync.lock"' EXIT
-    state=$(prefs_state) || {
-        say 'Tailscale設定を取得できないため、経路を変更しない。' >&2
+    managed_file="$STATE_DIR/managed.$$"
+    trap 'rm -f "$desired_file" "$managed_file"; rm -rf "$STATE_DIR/sync.lock"' EXIT
+    added_count=0
+    skipped_count=0
+    removed_count=0
+    error_count=0
+    log_info "実行: apply / IPv4ルーティングテーブル: $TABLE"
+    resolve_tailscale || {
+        log_error 'Tailscale CLIが見つからない。magisk-tailscaledのインストール状態を確認してほしい。'
         exit 1
     }
-    if [ "$state" != true ] || ! exit_route_ready; then
-        remove_managed
-        say "追加なし: AllowLAN=$state / Exit Node経路なし、または無効"
+    log_info "Tailscale CLI: $TAILSCALE"
+    state=$(prefs_state) || {
+        log_error 'Tailscale設定を取得できないため、経路は変更しない。'
+        exit 1
+    }
+    log_info "ExitNodeAllowLANAccess: $state"
+    if exit_route_ready; then
+        exit_active=true
+        log_info "Exit Node経路: 有効 (default dev tailscale0 / table $TABLE)"
+    else
+        exit_active=false
+        log_warn "Exit Node経路: 見つからない (table $TABLE)"
+    fi
+    if [ "$state" != true ] || [ "$exit_active" != true ]; then
+        if [ "$state" != true ]; then
+            log_warn 'LANアクセス許可が無効のため、補完経路を削除する'
+        else
+            log_warn 'Exit Node経路がないため、補完経路を削除する'
+        fi
+        remove_managed || {
+            log_error '管理対象の経路を取得できない'
+            exit 1
+        }
+        log_summary
+        [ "$error_count" -eq 0 ] || exit 1
+        log_info '処理完了: 追加なし'
         exit 0
     fi
-    collect_candidates > "$desired_file" || exit 1
-    managed_routes | while IFS='|' read -r cidr dev; do
-        [ -n "$cidr" ] && [ -n "$dev" ] || continue
-        if ! grep -Fqx "$cidr|$dev" "$desired_file"; then
-            if "$IP" -4 route del "$cidr" dev "$dev" proto "$PROTO" table "$TABLE" 2>/dev/null; then
-                say "不要経路を削除: $cidr dev $dev"
-            fi
-        fi
-    done
+    collect_candidates > "$desired_file" || {
+        log_error '直結LAN経路の取得に失敗した'
+        exit 1
+    }
+    candidate_count=$(awk 'END { print NR + 0 }' "$desired_file")
+    log_info "対象の直結IPv4 LAN: $candidate_count 件"
+    [ "$candidate_count" -gt 0 ] || log_warn '追加候補となる直結LANがない'
+    managed_routes > "$managed_file" || {
+        log_error '現在の管理対象経路を取得できない'
+        exit 1
+    }
     while IFS='|' read -r cidr dev; do
         [ -n "$cidr" ] && [ -n "$dev" ] || continue
-        if ! route_present "$cidr"; then
-            if "$IP" -4 route add "$cidr" dev "$dev" proto "$PROTO" scope link table "$TABLE" 2>/dev/null; then
-                say "追加: $cidr dev $dev"
+        if ! grep -Fqx "$cidr|$dev" "$desired_file"; then
+            if output=$("$IP" -4 route del "$cidr" dev "$dev" proto "$PROTO" table "$TABLE" 2>&1); then
+                log_remove "不要になった経路: $cidr dev $dev"
+                removed_count=$((removed_count + 1))
             else
-                say "追加失敗: $cidr dev $dev" >&2
+                log_error "不要経路を削除できない: $cidr dev $dev"
+                [ -z "$output" ] || log_error "$output"
+                error_count=$((error_count + 1))
             fi
         fi
+    done < "$managed_file"
+    while IFS='|' read -r cidr dev; do
+        [ -n "$cidr" ] && [ -n "$dev" ] || continue
+        if route_present "$cidr"; then
+            log_skip "$cidr dev $dev (table $TABLEに既存経路あり)"
+            skipped_count=$((skipped_count + 1))
+        elif output=$("$IP" -4 route add "$cidr" dev "$dev" proto "$PROTO" scope link table "$TABLE" 2>&1); then
+            log_add "$cidr dev $dev (table $TABLE)"
+            added_count=$((added_count + 1))
+        else
+            log_error "経路を追加できない: $cidr dev $dev"
+            [ -z "$output" ] || log_error "$output"
+            error_count=$((error_count + 1))
+        fi
     done < "$desired_file"
+    log_summary
+    if [ "$error_count" -gt 0 ]; then
+        log_error '一部の経路更新に失敗した'
+        exit 1
+    fi
+    log_info '処理完了'
 )
 
 cleanup_routes() (
     is_root || exit 1
-    ensure_state || exit 1
+    ensure_state || { log_error '状態保存ディレクトリを作成できない'; exit 1; }
     lock_sync || exit 1
-    trap 'rm -rf "$STATE_DIR/sync.lock"' EXIT
-    remove_managed
+    managed_file="$STATE_DIR/managed.$$"
+    trap 'rm -f "$managed_file"; rm -rf "$STATE_DIR/sync.lock"' EXIT
+    added_count=0
+    skipped_count=0
+    removed_count=0
+    error_count=0
+    log_info "実行: cleanup / IPv4ルーティングテーブル: $TABLE"
+    remove_managed || {
+        log_error '管理対象の経路を取得できない'
+        exit 1
+    }
+    log_summary
+    [ "$error_count" -eq 0 ] || exit 1
+    log_info '処理完了'
 )
 
 status() {

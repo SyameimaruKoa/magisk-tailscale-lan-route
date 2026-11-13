@@ -30,6 +30,9 @@ elif args[0] == '-4' and args[1:4] == ['route', 'show', 'table'] and args[4] == 
 elif args[:3] == ['-4', '-o', 'route'] and args[3:6] == ['show', 'table', '52']:
     print('\\n'.join(rows))
 elif args[:2] == ['-4', 'route'] and args[2] == 'add':
+    if os.environ.get('MOCK_FAIL_ADD') == '1':
+        print('RTNETLINK answers: Operation not permitted', file=sys.stderr)
+        sys.exit(2)
     cidr, dev = args[3], args[5]
     row = f'{cidr} dev {dev} proto 242 scope link'
     if row in rows:
@@ -174,6 +177,53 @@ class RouteTests(unittest.TestCase):
         result = self.run_cli('apply')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.get_routes(), ['default dev tailscale0', 'throw 192.168.55.0/24'])
+
+    def test_action_logs_added_existing_and_summary(self):
+        first = self.run_cli('apply')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn('[INFO] Tailscale CLI:', first.stdout)
+        self.assertIn('[INFO] ExitNodeAllowLANAccess: true', first.stdout)
+        self.assertIn('[INFO] Exit Node経路: 有効', first.stdout)
+        self.assertIn('[INFO] 対象の直結IPv4 LAN: 3 件', first.stdout)
+        self.assertIn('[ADD] 169.254.1.0/24 dev eth1', first.stdout)
+        self.assertIn('[ADD] 169.254.2.0/24 dev eth0', first.stdout)
+        self.assertIn('[SKIP] 192.168.55.0/24 dev wlan0', first.stdout)
+        self.assertIn('[RESULT] 追加=2 / 既存=1 / 削除=0 / 失敗=0', first.stdout)
+        again = self.run_cli('apply')
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn('[RESULT] 追加=0 / 既存=3 / 削除=0 / 失敗=0', again.stdout)
+
+    def test_action_logs_false_cleanup_result(self):
+        self.assertEqual(self.run_cli('apply').returncode, 0)
+        self.pref.write_text('false')
+        result = self.run_cli('apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('[INFO] ExitNodeAllowLANAccess: false', result.stdout)
+        self.assertIn('[WARN] LANアクセス許可が無効', result.stdout)
+        self.assertIn('[RESULT] 追加=0 / 既存=0 / 削除=2 / 失敗=0', result.stdout)
+
+    def test_action_logs_no_exit_cleanup(self):
+        self.assertEqual(self.run_cli('apply').returncode, 0)
+        self.routes.write_text(json_dump([r for r in self.get_routes() if r != 'default dev tailscale0']))
+        result = self.run_cli('apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('[WARN] Exit Node経路: 見つからない', result.stdout)
+        self.assertIn('[RESULT] 追加=0 / 既存=0 / 削除=2 / 失敗=0', result.stdout)
+
+    def test_route_add_failure_is_reported(self):
+        self.env['MOCK_FAIL_ADD'] = '1'
+        result = self.run_cli('apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('[RESULT] 追加=0 / 既存=1 / 削除=0 / 失敗=2', result.stdout)
+        self.assertIn('RTNETLINK answers: Operation not permitted', result.stderr)
+        self.assertIn('一部の経路更新に失敗', result.stderr)
+
+    def test_cleanup_shows_result(self):
+        self.assertEqual(self.run_cli('apply').returncode, 0)
+        result = self.run_cli('cleanup')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('[REMOVE] 169.254.1.0/24 dev eth1', result.stdout)
+        self.assertIn('[RESULT] 追加=0 / 既存=0 / 削除=2 / 失敗=0', result.stdout)
 
     def test_help(self):
         self.assertIn('使い方:', self.run_cli('--help').stdout)
