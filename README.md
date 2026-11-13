@@ -10,6 +10,29 @@ MagiskのActionボタンでは、`magisk-tailscaled`の`/data/adb/tailscale/bin/
 
 [Releases](https://github.com/SyameimaruKoa/magisk-tailscale-lan-route/releases) からZIPを取得し、Magisk/KernelSUのモジュール画面でインストールして再起動する。
 
+## Actionログ
+
+Magisk/KernelSUのAction画面に、バージョン・実行日時・使用したTailscale CLI・ExitNodeAllowLANAccess・Exit Node経路・検出したLAN・各経路の追加／スキップ／削除結果・集計を表示する。失敗時はエラー内容と終了コードを表示する。
+
+```text
+========================================
+  Tailscale Exit Node LAN Route Fix v1.1.3
+========================================
+[INFO] 実行時刻: 2026-11-13 14:00:00
+[INFO] 実行: apply / IPv4ルーティングテーブル: 52
+[INFO] Tailscale CLI: /data/adb/tailscale/bin/tailscale
+[INFO] ExitNodeAllowLANAccess: true
+[INFO] Exit Node経路: 有効 (default dev tailscale0 / table 52)
+[INFO] 対象の直結IPv4 LAN: 3 件
+[ADD] 169.254.1.0/24 dev eth1 (table 52)
+[ADD] 169.254.2.0/24 dev eth0 (table 52)
+[SKIP] 192.168.55.0/24 dev wlan0 (table 52に既存経路あり)
+[RESULT] 追加=2 / 既存=1 / 削除=0 / 失敗=0
+[INFO] 処理完了
+[SUCCESS] Action完了
+========================================
+```
+
 ## 実行
 
 - **Actionボタン**：`apply` を1回実行。
