@@ -29,9 +29,10 @@ TS LAN Route - Tailscale Exit Node用のローカルLAN経路補完
     既存のTailscale経路や他ソフトの経路は変更しない。
     tailscale debug prefsのExitNodeAllowLANAccessを必ず確認する。
     MagiskのActionからもmagisk-tailscaledのCLIを直接検出する。
-    IPv6には対応しない。自動監視・自動実行はしない。
+    IPv6には対応しない。起動後はイベント駆動で自動復旧する。
 
 Magisk/KernelSUのActionボタンは 'apply' を1回実行する。
+自動復旧中は cleanup で削除した経路も必要なら再追加される。
 HELP
 }
 
@@ -210,6 +211,11 @@ lock_sync() {
             return 0
         fi
         old_pid=$(cat "$STATE_DIR/sync.lock/pid" 2>/dev/null || true)
+        if [ -z "$old_pid" ]; then
+            # mkdir直後の別プロセスがPIDを書き込むまで待つ。
+            sleep 1
+            old_pid=$(cat "$STATE_DIR/sync.lock/pid" 2>/dev/null || true)
+        fi
         if [ -z "$old_pid" ] || ! kill -0 "$old_pid" 2>/dev/null; then
             rm -rf "$STATE_DIR/sync.lock"
         else

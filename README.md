@@ -2,13 +2,21 @@
 
 [magisk-tailscaled](https://github.com/anasfanani/magisk-tailscaled) などのroot権限で稼働するTailscaleで、Exit Node利用中にUSB・Wi-Fi・有線などの直結LANへ接続できなくなる問題を補完するMagisk/KernelSUモジュール。
 
-**手動実行専用**。起動時の自動処理や常駐監視はしない。
+**自動復旧対応**。起動時に一度適用し、その後はカーネルのIPv4経路変更通知（RTNETLINK）とTailscaleの状態ファイル／ソケット更新通知（inotify）で即時に再適用する。定期ポーリング、通信パケット監視、WakeLockは使用しない。
 
 MagiskのActionボタンでは、`magisk-tailscaled`の`/data/adb/tailscale/bin/tailscale`を優先して検出する。PATHにCLIが登録されていなくても`ExitNodeAllowLANAccess`を取得できるようにしてある。取得に失敗した場合は検出したCLIのパスをエラーに表示し、経路は変更しない。
 
 ## インストール
 
 [Releases](https://github.com/SyameimaruKoa/magisk-tailscale-lan-route/releases) からZIPを取得し、Magisk/KernelSUのモジュール画面でインストールして再起動する。
+
+## 自動復旧
+
+- USB・Wi-Fi・有線などの直結IPv4経路の追加／削除、テーブル52の変更、magisk-tailscaledの状態ファイル更新を検知する。
+- 監視は軽量なネイティブプロセス1つ。通知がない間はブロッキング待機し、復旧処理を起動しない。自分が追加した経路の追加通知は無視する。
+- 失敗時のみ200ms、1秒、3秒の有限回再試行を行い、その後は次のイベントを待つ。
+- 自動復旧の開始・追加・削除・エラーは `su -c 'logcat -d -s TS-LAN-Route'` で確認できる。
+- Actionボタンと手動コマンドは引き続き使用できる。自動復旧中は `cleanup` により削除した経路も、必要であれば再追加される。
 
 ## Actionログ
 
@@ -70,14 +78,15 @@ Android標準の`sed`で正規表現の選択構文が動作しない場合を�
 
 ## 制限
 
-- **自動監視・起動時適用なし**。USB再接続、インターフェース変更、Tailscaleの経路再生成後は、Actionボタンまたは`apply`を再実行する。
+- カーネルがサスペンド中はCPUを独自に起こさない。復帰後に通知を処理する。
+- 状態ファイルの変更監視はmagisk-tailscaledの標準配置（`/data/adb/tailscale` および `tmp`）に対応する。
 - IPv4のみ。IPv6の経路は変更しない。
 - Androidアプリごとのnetd/fwmark設定などにより、追加した経路だけでは通信が復旧しない場合がある。
 - ローカルLAN宛て通信はExit Nodeを経由しない。
 
 ## アンインストール
 
-モジュールをアンインストールすると、自身が追加した経路を削除する。手動で先に削除する場合は`cleanup`を実行する。
+モジュールをアンインストールすると、自身が追加した経路を削除する。監視プロセスを停止してから自身が追加した経路を削除する。
 
 ## ZIPの自動生成
 

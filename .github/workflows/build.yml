@@ -24,8 +24,25 @@ jobs:
             - name: Verify scripts and run tests
               run: |
                   set -euo pipefail
-                  sh -n action.sh uninstall.sh system/bin/ts-lan-route
+                  for script in action.sh customize.sh service.sh uninstall.sh system/bin/ts-lan-route; do sh -n "$script"; done
+                  cc -std=c11 -Wall -Wextra -Werror -O2 tests/test_watch.c -o /tmp/test-watch
+                  /tmp/test-watch
                   python3 -m unittest discover -s tests -v
+
+            - name: Build Android native watcher
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+                  test -d "$ndk"
+                  toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+                  for spec in 'arm64-v8a:aarch64-linux-android' 'armeabi-v7a:armv7a-linux-androideabi' 'x86_64:x86_64-linux-android' 'x86:i686-linux-android'; do
+                      abi="${spec%%:*}"
+                      target="${spec#*:}"
+                      mkdir -p "bin/$abi"
+                      "$toolchain/${target}23-clang" -std=c11 -Wall -Wextra -Werror -Os -fPIE -pie native/watch.c -llog -o "bin/$abi/tslr-watch"
+                      "$toolchain/llvm-strip" "bin/$abi/tslr-watch"
+                  done
 
             - name: Build and verify module ZIP
               id: package
@@ -39,9 +56,9 @@ jobs:
                   fi
                   mkdir -p dist
                   archive="dist/TS-LAN-Route-${version}.zip"
-                  zip -q -X "$archive" module.prop action.sh uninstall.sh system/bin/ts-lan-route
+                  zip -q -X "$archive" module.prop action.sh customize.sh service.sh uninstall.sh system/bin/ts-lan-route bin/*/tslr-watch
                   unzip -t "$archive"
-                  diff -u <(printf '%s\n' action.sh module.prop system/bin/ts-lan-route uninstall.sh | sort) <(unzip -Z1 "$archive" | sort)
+                  diff -u <(printf '%s\n' action.sh customize.sh service.sh module.prop system/bin/ts-lan-route uninstall.sh bin/*/tslr-watch | sort) <(unzip -Z1 "$archive" | sort)
                   printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
             - name: Upload workflow artifact
